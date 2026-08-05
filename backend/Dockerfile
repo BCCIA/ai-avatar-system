@@ -24,11 +24,11 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies (retries/timeout tolerate an unstable connection)
+RUN pip install --no-cache-dir --retries 10 --timeout 100 -r requirements.txt
 
 # Install PyTorch with CUDA 11.8 (matches base image)
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir --retries 10 --timeout 100 \
     torch==2.2.0+cu118 \
     torchvision==0.17.0+cu118 \
     torchaudio==2.2.0+cu118 \
