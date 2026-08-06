@@ -6,6 +6,7 @@ interface User {
   email: string
   username: string
   full_name?: string
+  is_superuser?: boolean
 }
 
 interface AppState {

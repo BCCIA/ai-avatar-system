@@ -26,13 +26,16 @@ def _user_id(current_user: Optional[User]) -> str:
     return current_user.id if current_user else "demo-user"
 
 
-async def _get_owned_session(session_id: str, uid: str, db: AsyncSession) -> Session:
-    """Fetch session and verify ownership."""
+async def _get_owned_session(
+    session_id: str, uid: str, db: AsyncSession, current_user: Optional[User] = None
+) -> Session:
+    """Fetch session and verify ownership (superusers may access any session)."""
     result = await db.execute(select(Session).where(Session.id == session_id))
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    if session.user_id != uid:
+    is_admin = current_user is not None and current_user.is_superuser
+    if session.user_id != uid and not is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Not authorised to access this session"
         )
@@ -47,7 +50,7 @@ async def send_message(
 ):
     """Send a message in a session (REST fallback; prefer WebSocket for real-time)."""
     try:
-        session = await _get_owned_session(message_data.session_id, _user_id(current_user), db)
+        session = await _get_owned_session(message_data.session_id, _user_id(current_user), db, current_user)
 
         if session.status != "active":
             raise HTTPException(
@@ -86,7 +89,7 @@ async def list_session_messages(
 ):
     """List messages in a session (must own the session)."""
     try:
-        await _get_owned_session(session_id, _user_id(current_user), db)
+        await _get_owned_session(session_id, _user_id(current_user), db, current_user)
 
         result = await db.execute(
             select(Message)
@@ -120,7 +123,7 @@ async def get_message(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
 
         # Verify ownership via parent session
-        await _get_owned_session(message.session_id, _user_id(current_user), db)
+        await _get_owned_session(message.session_id, _user_id(current_user), db, current_user)
         return message
 
     except HTTPException:
@@ -152,7 +155,7 @@ async def download_message_video(
     if not message:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
 
-    await _get_owned_session(message.session_id, _user_id(current_user), db)
+    await _get_owned_session(message.session_id, _user_id(current_user), db, current_user)
 
     chunks = sorted(
         (message.message_metadata or {}).get("video_chunks") or [],
@@ -250,7 +253,7 @@ async def edit_message(
         if not message:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
 
-        await _get_owned_session(message.session_id, _user_id(current_user), db)
+        await _get_owned_session(message.session_id, _user_id(current_user), db, current_user)
         message.content = payload.content.strip()
         await db.commit()
         await db.refresh(message)
@@ -278,7 +281,7 @@ async def delete_message(
         if not message:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
 
-        await _get_owned_session(message.session_id, _user_id(current_user), db)
+        await _get_owned_session(message.session_id, _user_id(current_user), db, current_user)
         await db.delete(message)
         await db.commit()
     except HTTPException:

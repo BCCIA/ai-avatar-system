@@ -21,6 +21,12 @@ def _user_id(current_user: Optional[User]) -> str:
     return current_user.id if current_user else "demo-user"
 
 
+def _is_owner_or_admin(resource_user_id: str, current_user: Optional[User]) -> bool:
+    if current_user is not None and current_user.is_superuser:
+        return True
+    return resource_user_id == _user_id(current_user)
+
+
 @router.post("/create", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(
     session_data: SessionCreate,
@@ -74,18 +80,16 @@ async def create_session(
 async def list_sessions(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    all: bool = Query(False, description="Superuser only — list every user's sessions"),
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user),
 ):
-    """List sessions belonging to the current user."""
+    """List sessions belonging to the current user (or everyone's, for admins)."""
     try:
-        result = await db.execute(
-            select(Session)
-            .where(Session.user_id == _user_id(current_user))
-            .offset(skip)
-            .limit(limit)
-            .order_by(Session.started_at.desc())
-        )
+        query = select(Session).offset(skip).limit(limit).order_by(Session.started_at.desc())
+        if not (all and current_user and current_user.is_superuser):
+            query = query.where(Session.user_id == _user_id(current_user))
+        result = await db.execute(query)
         return result.scalars().all()
     except Exception as e:
         logger.error(f"Failed to list sessions: {e}")
@@ -108,7 +112,7 @@ async def get_session(
         if not session:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-        if session.user_id != _user_id(current_user):
+        if not _is_owner_or_admin(session.user_id, current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorised to access this session",
@@ -138,7 +142,7 @@ async def end_session(
         if not session:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-        if session.user_id != _user_id(current_user):
+        if not _is_owner_or_admin(session.user_id, current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Not authorised to end this session"
             )
@@ -185,7 +189,7 @@ async def export_session(
         session = result.scalar_one_or_none()
         if not session:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        if session.user_id != _user_id(current_user):
+        if not _is_owner_or_admin(session.user_id, current_user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorised")
 
         msgs_result = await db.execute(
@@ -251,7 +255,7 @@ async def delete_session(
         if not session:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
-        if session.user_id != _user_id(current_user):
+        if not _is_owner_or_admin(session.user_id, current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorised to delete this session",

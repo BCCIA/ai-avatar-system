@@ -24,6 +24,12 @@ def _user_id(current_user: Optional[User]) -> str:
     return current_user.id if current_user else "demo-user"
 
 
+def _is_owner_or_admin(resource_user_id: str, current_user: Optional[User]) -> bool:
+    if current_user is not None and current_user.is_superuser:
+        return True
+    return resource_user_id == _user_id(current_user)
+
+
 def _validate_uuid(avatar_id: str) -> None:
     """
     Reject anything that isn't a UUID to keep S3 keys + filesystem paths safe.
@@ -130,18 +136,15 @@ async def upload_avatar(
 async def list_avatars(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=200),
+    all: bool = Query(False, description="Superuser only — list every user's avatars"),
     db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user),
 ):
-    """List avatars belonging to the current user."""
-    uid = _user_id(current_user)
-    result = await db.execute(
-        select(Avatar)
-        .where(Avatar.user_id == uid)
-        .offset(skip)
-        .limit(limit)
-        .order_by(Avatar.created_at.desc())
-    )
+    """List avatars belonging to the current user (or everyone's, for admins)."""
+    query = select(Avatar).offset(skip).limit(limit).order_by(Avatar.created_at.desc())
+    if not (all and current_user and current_user.is_superuser):
+        query = query.where(Avatar.user_id == _user_id(current_user))
+    result = await db.execute(query)
     return result.scalars().all()
 
 
@@ -156,7 +159,7 @@ async def get_avatar(
     avatar = result.scalar_one_or_none()
     if not avatar:
         raise HTTPException(status_code=404, detail="Avatar not found")
-    if avatar.user_id != _user_id(current_user):
+    if not _is_owner_or_admin(avatar.user_id, current_user):
         raise HTTPException(status_code=403, detail="Not authorised to access this avatar")
     return avatar
 
@@ -177,7 +180,7 @@ async def set_avatar_voice(
     avatar = result.scalar_one_or_none()
     if not avatar:
         raise HTTPException(status_code=404, detail="Avatar not found")
-    if avatar.user_id != _user_id(current_user):
+    if not _is_owner_or_admin(avatar.user_id, current_user):
         raise HTTPException(status_code=403, detail="Not authorised to modify this avatar")
 
     try:
@@ -206,7 +209,7 @@ async def update_avatar_metadata(
     avatar = result.scalar_one_or_none()
     if not avatar:
         raise HTTPException(status_code=404, detail="Avatar not found")
-    if avatar.user_id != _user_id(current_user):
+    if not _is_owner_or_admin(avatar.user_id, current_user):
         raise HTTPException(status_code=403, detail="Not authorised to modify this avatar")
 
     existing: dict = avatar.avatar_metadata or {}
@@ -253,7 +256,7 @@ async def rename_avatar(
     avatar = result.scalar_one_or_none()
     if not avatar:
         raise HTTPException(status_code=404, detail="Avatar not found")
-    if avatar.user_id != _user_id(current_user):
+    if not _is_owner_or_admin(avatar.user_id, current_user):
         raise HTTPException(status_code=403, detail="Not authorised to modify this avatar")
     try:
         avatar.name = name
@@ -278,7 +281,7 @@ async def delete_avatar(
     avatar = result.scalar_one_or_none()
     if not avatar:
         raise HTTPException(status_code=404, detail="Avatar not found")
-    if avatar.user_id != _user_id(current_user):
+    if not _is_owner_or_admin(avatar.user_id, current_user):
         raise HTTPException(status_code=403, detail="Not authorised to delete this avatar")
 
     # Delete the DB row first (sessions/messages/conversations cascade), THEN

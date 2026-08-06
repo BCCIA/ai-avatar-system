@@ -31,6 +31,10 @@ const SettingsPanel = dynamic(
   () => import('@/components/SettingsPanel').then(m => m.SettingsPanel),
   { ssr: false, loading: () => <PanelLoader label="Loading settings…" /> },
 )
+const AdminPanel = dynamic(
+  () => import('@/components/AdminPanel').then(m => m.AdminPanel),
+  { ssr: false, loading: () => <PanelLoader label="Loading admin…" /> },
+)
 
 function PanelLoader({ label }: { label: string }) {
   return (
@@ -55,6 +59,7 @@ import {
   AudioWaveform,
   History,
   Settings,
+  ShieldCheck,
 } from 'lucide-react'
 
 const FEATURES = [
@@ -109,7 +114,7 @@ const STATS = [
   { value: '100%', label: 'Self-hostable' },
 ]
 
-type View = 'home' | 'avatars' | 'chat' | 'voice' | 'history' | 'settings'
+type View = 'home' | 'avatars' | 'chat' | 'voice' | 'history' | 'settings' | 'admin'
 
 export default function Home() {
   const { isAuthenticated, user, clearAuth } = useStore()
@@ -160,6 +165,7 @@ export default function Home() {
     { id: 'chat', icon: MessageCircle, label: 'Chat', disabled: !selectedAvatar },
     { id: 'history', icon: History, label: 'History' },
     { id: 'settings', icon: Settings, label: 'Settings' },
+    ...(user?.is_superuser ? [{ id: 'admin' as View, icon: ShieldCheck, label: 'Admin' }] : []),
   ]
 
   return (
@@ -388,6 +394,11 @@ export default function Home() {
         {/* ── SETTINGS VIEW ── */}
         {view === 'settings' && (
           <SettingsPanel />
+        )}
+
+        {/* ── ADMIN VIEW ── */}
+        {view === 'admin' && user?.is_superuser && (
+          <AdminPanel />
         )}
       </main>
     </div>

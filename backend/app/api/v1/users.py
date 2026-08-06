@@ -6,6 +6,7 @@ import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -290,6 +291,55 @@ async def list_users(
         logger.error(f"Failed to list users: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list users"
+        )
+
+
+class AdminUserUpdate(BaseModel):
+    is_active: Optional[bool] = None
+    is_superuser: Optional[bool] = None
+
+
+@router.patch("/{user_id}/admin", response_model=UserResponse)
+async def admin_update_user(
+    user_id: str,
+    payload: AdminUserUpdate,
+    current_user: User = Depends(require_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle another user's active/superuser flags — superuser only."""
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+    try:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+        # Prevent an admin from locking themselves out of the admin panel.
+        if user.id == current_user.id and (
+            payload.is_active is False or payload.is_superuser is False
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot revoke your own active/admin status",
+            )
+
+        if payload.is_active is not None:
+            user.is_active = payload.is_active
+        if payload.is_superuser is not None:
+            user.is_superuser = payload.is_superuser
+
+        await db.commit()
+        await db.refresh(user)
+        logger.info(f"User {user_id} updated by admin {current_user.id}: {payload}")
+        return user
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to admin-update user {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update user"
         )
 
 

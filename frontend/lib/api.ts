@@ -173,6 +173,32 @@ export const api = {
     return response.data as Blob
   },
 
+  // Admin (superuser only — backend enforces this regardless of what the UI shows)
+  getAdminStats: async () => {
+    const response = await apiClient.get('/api/v1/admin/stats')
+    return response.data
+  },
+
+  adminListUsers: async () => {
+    const response = await apiClient.get('/api/v1/users/')
+    return response.data
+  },
+
+  adminUpdateUser: async (userId: string, data: { is_active?: boolean; is_superuser?: boolean }) => {
+    const response = await apiClient.patch(`/api/v1/users/${userId}/admin`, data)
+    return response.data
+  },
+
+  adminListAvatars: async () => {
+    const response = await apiClient.get('/api/v1/avatars/?all=true&limit=200')
+    return response.data
+  },
+
+  adminListSessions: async () => {
+    const response = await apiClient.get('/api/v1/sessions/?all=true&limit=200')
+    return response.data
+  },
+
   // Messages
   sendMessage: async (sessionId: string, content: string) => {
     const response = await apiClient.post('/api/v1/messages/send', {
