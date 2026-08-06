@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     AUTH_COOKIE_SAMESITE: str = "lax"  # lax | strict | none
     AUTH_COOKIE_DOMAIN: Optional[str] = None
 
+    # If set, the user registered with this email is promoted to superuser
+    # on every startup (idempotent) — the only way to bootstrap the first
+    # admin, since granting admin otherwise requires already being one.
+    ADMIN_EMAIL: Optional[str] = None
+
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
     RATE_LIMIT_PER_HOUR: int = 1000

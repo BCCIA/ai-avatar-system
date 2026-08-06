@@ -100,6 +100,27 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Could not seed demo user: {e}")
 
+    # Promote the configured admin email to superuser, if that user exists.
+    # Idempotent — safe to leave ADMIN_EMAIL set across restarts.
+    if settings.ADMIN_EMAIL:
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(User).where(User.email == settings.ADMIN_EMAIL)
+                )
+                admin_user = result.scalar_one_or_none()
+                if admin_user is None:
+                    logger.warning(
+                        f"ADMIN_EMAIL={settings.ADMIN_EMAIL!r} is set but no such user is "
+                        "registered yet — register the account, then restart to promote it."
+                    )
+                elif not admin_user.is_superuser:
+                    admin_user.is_superuser = True
+                    await session.commit()
+                    logger.info(f"Promoted {settings.ADMIN_EMAIL!r} to superuser")
+        except Exception as e:
+            logger.warning(f"Could not apply ADMIN_EMAIL promotion: {e}")
+
     # Mount local uploads directory so the browser can fetch images/videos
     if getattr(settings, "USE_LOCAL_STORAGE", True):
         uploads_dir = Path(settings.LOCAL_STORAGE_PATH)
