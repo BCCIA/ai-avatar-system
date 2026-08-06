@@ -89,7 +89,10 @@ async def lifespan(app: FastAPI):
                     session.add(
                         User(
                             id="demo-user",
-                            email="demo@localhost",
+                            # Must be RFC-valid — UserResponse.email is EmailStr, so a
+                            # bare "demo@localhost" (no TLD) fails on serialization the
+                            # moment any endpoint returns this user (e.g. GET /users/).
+                            email="demo@avatarai-demo.com",
                             username="demo",
                             hashed_password="",  # disabled — login route rejects empty passwords
                             full_name="Demo User",

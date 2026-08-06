@@ -24,6 +24,12 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements
 COPY requirements.txt .
 
+# numpy first: pkuseg (pulled in transitively by chatterbox-tts) has a
+# legacy setup.py that does `import numpy` at build time without declaring
+# it as a build dependency, so it must already be importable before the
+# main install below reaches it.
+RUN pip install --no-cache-dir --retries 10 --timeout 100 numpy==1.25.2
+
 # Install Python dependencies (retries/timeout tolerate an unstable connection)
 RUN pip install --no-cache-dir --retries 10 --timeout 100 -r requirements.txt
 
