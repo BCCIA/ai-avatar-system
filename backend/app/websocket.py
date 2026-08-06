@@ -370,6 +370,7 @@ class ConnectionManager:
         role: str,
         content: str,
         latency: Optional[float] = None,
+        video_chunks: Optional[List[dict]] = None,
     ) -> None:
         """Best-effort persist a message; failure must not break the chat pipeline."""
         try:
@@ -382,8 +383,9 @@ class ConnectionManager:
                         session_id=session_id,
                         role=role,
                         content=content,
-                        content_type="text",
+                        content_type="video" if video_chunks else "text",
                         latency=latency,
+                        message_metadata={"video_chunks": video_chunks} if video_chunks else None,
                     )
                 )
                 await db.commit()
@@ -595,11 +597,18 @@ class ConnectionManager:
                     raise r
 
             response_text = results[0] if isinstance(results[0], str) else ""
+            video_chunks = results[1] if isinstance(results[1], list) else []
             if response_text:
                 messages.append({"role": "assistant", "content": response_text})
                 data["messages"] = messages
                 latency = (datetime.now(timezone.utc) - started_at).total_seconds()
-                await self._persist_message(session_id, "assistant", response_text, latency=latency)
+                await self._persist_message(
+                    session_id,
+                    "assistant",
+                    response_text,
+                    latency=latency,
+                    video_chunks=video_chunks,
+                )
 
         except Exception as e:
             logger.error(f"Text error [{session_id}]: {e}")
@@ -669,10 +678,15 @@ class ConnectionManager:
         self,
         session_id: str,
         queue: "asyncio.Queue[Optional[str]]",
-    ) -> None:
+    ) -> List[dict]:
         """
         Consume sentences from the queue and run TTS + animation for each,
         streaming video_chunk events to the frontend as they complete.
+
+        Returns the list of uploaded chunks (storage key, index, text) so the
+        caller can attach them to the persisted assistant message for later
+        export/download — the per-chunk mp4s in storage are the only durable
+        copy of the generated video.
         """
         data = self.session_data.get(session_id, {})
         avatar_image = data.get("avatar_image_local")
@@ -686,10 +700,11 @@ class ConnectionManager:
                 item = await queue.get()
                 if item is None:
                     break
-            return
+            return []
 
         chunk_index: int = 0
         sent_any = False
+        video_chunks: List[dict] = []
         # Only warn about TTS fallback once per turn — repeated warnings on
         # every sentence would be noisy. We reset this in the enclosing turn.
         fallback_announced = False
@@ -781,6 +796,7 @@ class ConnectionManager:
                         "text": sentence,
                     },
                 )
+                video_chunks.append({"key": video_key, "index": chunk_index, "text": sentence})
                 chunk_index = chunk_index + 1
                 sent_any = True
                 logger.info(f"Chunk {chunk_index} ready [{session_id}]")
@@ -805,6 +821,8 @@ class ConnectionManager:
                 session_id,
                 {"type": "error", "message": "Avatar animation failed for all sentences."},
             )
+
+        return video_chunks
 
     # ── helpers ───────────────────────────────────────────────────────────────
 

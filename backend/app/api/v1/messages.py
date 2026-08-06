@@ -1,15 +1,22 @@
+import asyncio
 import logging
+import shutil
+import tempfile
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from app.api.v1.users import get_current_user
 from app.database import get_db
 from app.models import Message, Session, User
 from app.schemas import MessageCreate, MessageResponse
+from app.services.storage import storage_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -122,6 +129,106 @@ async def get_message(
         logger.error(f"Failed to get message: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get message"
+        )
+
+
+@router.get("/{message_id}/video")
+async def download_message_video(
+    message_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user),
+):
+    """
+    Download the generated video for an assistant message as a single mp4.
+
+    The pipeline generates one clip per sentence (see websocket.py's
+    `_animate_from_queue`); their storage keys are recorded on the message's
+    `message_metadata.video_chunks`. Chunks are concatenated with a stream
+    copy (no re-encode, since they share codec/resolution) when there's more
+    than one.
+    """
+    result = await db.execute(select(Message).where(Message.id == message_id))
+    message = result.scalar_one_or_none()
+    if not message:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+
+    await _get_owned_session(message.session_id, _user_id(current_user), db)
+
+    chunks = sorted(
+        (message.message_metadata or {}).get("video_chunks") or [],
+        key=lambda c: c.get("index", 0),
+    )
+    if not chunks:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No video available for this message"
+        )
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="msg-video-"))
+    try:
+        chunk_paths = []
+        for i, chunk in enumerate(chunks):
+            try:
+                data = await storage_service.download_file(chunk["key"])
+            except FileNotFoundError:
+                continue
+            path = tmp_dir / f"chunk_{i}.mp4"
+            path.write_bytes(data)
+            chunk_paths.append(path)
+
+        if not chunk_paths:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Video chunks are no longer available",
+            )
+
+        if len(chunk_paths) == 1:
+            output_path = chunk_paths[0]
+        else:
+            filelist = tmp_dir / "concat.txt"
+            filelist.write_text("\n".join(f"file '{p.name}'" for p in chunk_paths))
+            output_path = tmp_dir / "combined.mp4"
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(filelist),
+                "-c",
+                "copy",
+                str(output_path),
+                cwd=str(tmp_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0 or not output_path.exists():
+                logger.error(
+                    f"ffmpeg concat failed for message {message_id}: "
+                    f"{stderr.decode(errors='replace')}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to assemble video",
+                )
+
+        return FileResponse(
+            path=str(output_path),
+            media_type="video/mp4",
+            filename=f"message-{message.id[:8]}.mp4",
+            background=BackgroundTask(shutil.rmtree, str(tmp_dir), True),
+        )
+    except HTTPException:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        logger.error(f"Failed to build video download for message {message_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to build video download",
         )
 
 

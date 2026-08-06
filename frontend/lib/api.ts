@@ -187,6 +187,13 @@ export const api = {
     return response.data
   },
 
+  downloadMessageVideo: async (messageId: string) => {
+    const response = await apiClient.get(`/api/v1/messages/${messageId}/video`, {
+      responseType: 'blob',
+    })
+    return response.data as Blob
+  },
+
   editMessage: async (messageId: string, content: string) => {
     const response = await apiClient.patch(`/api/v1/messages/${messageId}`, { content })
     return response.data

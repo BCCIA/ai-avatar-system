@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Clock, MessageCircle, Trash2, Play, RefreshCw, Search, Loader2,
-  Download, Pencil, Check, X, Sparkles,
+  Download, Pencil, Check, X, Sparkles, Film,
 } from 'lucide-react'
 import { toast } from 'react-hot-toast'
 import { api } from '@/lib/api'
@@ -58,6 +58,7 @@ export function HistoryPanel({ onResume }: HistoryPanelProps) {
   const [renameValue, setRenameValue] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [summarizingId, setSummarizingId] = useState<string | null>(null)
+  const [downloadingVideoId, setDownloadingVideoId] = useState<string | null>(null)
 
   const { data: sessions, isLoading, refetch } = useQuery<SessionSummary[]>({
     queryKey: ['sessions'],
@@ -154,6 +155,18 @@ export function HistoryPanel({ onResume }: HistoryPanelProps) {
       toast.error('Could not export conversation')
     } finally {
       setBusy(null)
+    }
+  }
+
+  const handleDownloadVideo = async (messageId: string) => {
+    setDownloadingVideoId(messageId)
+    try {
+      const blob = await api.downloadMessageVideo(messageId)
+      downloadBlob(blob, `message-${messageId.slice(0, 8)}.mp4`)
+    } catch {
+      toast.error('Could not download video')
+    } finally {
+      setDownloadingVideoId(null)
     }
   }
 
@@ -410,6 +423,21 @@ export function HistoryPanel({ onResume }: HistoryPanelProps) {
                               {m.role === 'user' ? 'YOU' : 'AI'}
                             </span>
                             <span className="text-gray-200 flex-1 leading-relaxed whitespace-pre-wrap">{m.content}</span>
+                            {m.content_type === 'video' && (
+                              <button
+                                onClick={() => handleDownloadVideo(m.id)}
+                                className="btn-icon flex-shrink-0"
+                                title="Download video"
+                                aria-label="Download video for this message"
+                                disabled={downloadingVideoId === m.id}
+                              >
+                                {downloadingVideoId === m.id ? (
+                                  <Loader2 size={13} className="animate-spin" />
+                                ) : (
+                                  <Film size={13} />
+                                )}
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>
