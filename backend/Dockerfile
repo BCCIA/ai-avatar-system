@@ -28,17 +28,42 @@ COPY requirements.txt .
 # legacy setup.py that does `import numpy` at build time without declaring
 # it as a build dependency, so it must already be importable before the
 # main install below reaches it.
-RUN pip install --no-cache-dir --retries 10 --timeout 100 numpy==1.25.2
+#
+# Both installs below are wrapped in a retry loop with `timeout` rather than
+# relying on pip's own --retries/--timeout: this environment has repeatedly
+# shown a stalled connection that trickles zero bytes without ever tripping
+# pip's socket timeout, hanging for 10+ minutes on a single large wheel.
+# `timeout` hard-kills and retries the whole pip invocation instead; dropping
+# --no-cache-dir lets each retry skip wheels a prior attempt already fetched.
+RUN for i in $(seq 1 10); do \
+      timeout 180 pip install --retries 5 --timeout 30 numpy==1.25.2 && break; \
+      echo "numpy install attempt $i failed/timed out, retrying..."; \
+      sleep 3; \
+    done
 
-# Install Python dependencies (retries/timeout tolerate an unstable connection)
-RUN pip install --no-cache-dir --retries 10 --timeout 100 -r requirements.txt
+# Install PyTorch with CUDA 11.8 BEFORE requirements.txt, pinned to EXACTLY
+# what chatterbox-tts requires (torch==2.6.0 / torchaudio==2.6.0 — every
+# viable chatterbox-tts release pins these with no room to negotiate; verify
+# via `pip index versions` / PyPI's requires_dist before ever changing this).
+# Installing a torch version chatterbox-tts doesn't ask for is worse than
+# skipping this step: pip's resolver will silently reinstall whatever
+# version requirements.txt below actually needs — which, with no CUDA index
+# active at that point, means a CPU-only torch quietly replacing this one,
+# and the "GPU build" shipping without GPU support and no error to show it.
+RUN for i in $(seq 1 10); do \
+      timeout 300 pip install --retries 5 --timeout 30 \
+        torch==2.6.0+cu118 torchvision==0.21.0+cu118 torchaudio==2.6.0+cu118 \
+        --index-url https://download.pytorch.org/whl/cu118 && break; \
+      echo "torch install attempt $i failed/timed out, retrying..."; \
+      sleep 3; \
+    done
 
-# Install PyTorch with CUDA 11.8 (matches base image)
-RUN pip install --no-cache-dir --retries 10 --timeout 100 \
-    torch==2.2.0+cu118 \
-    torchvision==0.17.0+cu118 \
-    torchaudio==2.2.0+cu118 \
-    --index-url https://download.pytorch.org/whl/cu118
+# Install remaining Python dependencies
+RUN for i in $(seq 1 10); do \
+      timeout 300 pip install --retries 5 --timeout 30 -r requirements.txt && break; \
+      echo "requirements install attempt $i failed/timed out, retrying..."; \
+      sleep 3; \
+    done
 
 # Copy application code
 COPY . .
